@@ -1,0 +1,37 @@
+[package]
+name = "qiankui"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "A modular, self-hosted private networking relay with replaceable transports."
+license = "Apache-2.0"
+repository = "https://github.com/ProgrammerAsahi/qiankui"
+default-run = "qiankui"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.10"
+subtle = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+url = "2"
+webpki-roots = "1"
+
+[dev-dependencies]
+rcgen = "0.14"
+tempfile = "3"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
+
+[[bin]]
+name = "qiankui"
+path = "src/bin/qiankui.rs"
+
+[[bin]]
+name = "qiankui-relay"
+path = "src/bin/qiankui-relay.rs"

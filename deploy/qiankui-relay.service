@@ -1,0 +1,32 @@
+[Unit]
+Description=Qiankui relay service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=qiankui
+Group=qiankui
+EnvironmentFile=/etc/qiankui/qiankui.env
+ExecStart=/usr/local/bin/qiankui-relay --listen 0.0.0.0:443 --cert /etc/qiankui/cert.pem --key /etc/qiankui/key.pem --ports 80,443
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=65536
+UMask=0077
+
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
