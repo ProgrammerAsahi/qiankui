@@ -35,7 +35,11 @@ impl Token {
 
     pub fn from_arg_or_env(value: Option<String>) -> Result<Self, TokenError> {
         value
-            .or_else(|| std::env::var("QIANKUI_TOKEN").ok())
+            .or_else(|| {
+                std::env::var("QIANKUI_TOKEN")
+                    .ok()
+                    .map(normalize_environment_token)
+            })
             .ok_or(TokenError::Missing)
             .and_then(Self::parse)
     }
@@ -51,6 +55,10 @@ impl Token {
         let candidate: [u8; 32] = Sha256::digest(value.as_bytes()).into();
         bool::from(candidate.ct_eq(&self.digest))
     }
+}
+
+fn normalize_environment_token(value: String) -> String {
+    value.trim_end_matches(['\r', '\n']).to_owned()
 }
 
 impl fmt::Debug for Token {
@@ -90,5 +98,17 @@ mod tests {
             Token::parse("token with spaces is rejected"),
             Err(TokenError::InvalidCharacters)
         ));
+    }
+
+    #[test]
+    fn trims_only_line_endings_from_environment_values() {
+        assert_eq!(
+            normalize_environment_token("a-token-with-enough-bytes\r\n".to_owned()),
+            "a-token-with-enough-bytes"
+        );
+        assert_eq!(
+            normalize_environment_token("a token with spaces  \n".to_owned()),
+            "a token with spaces  "
+        );
     }
 }

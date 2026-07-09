@@ -15,7 +15,7 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
       - name: Check formatting
@@ -26,3 +26,10 @@ jobs:
         run: cargo test --all-targets --locked
       - name: Build release binaries
         run: cargo build --release --locked
+      - name: Check Azure deployment scripts
+        run: bash -n deploy/azure/*.sh
+      - name: Compile Azure Bicep
+        run: |
+          az bicep build --file deploy/azure/base.bicep --outfile /tmp/qiankui-base.json
+          az bicep build --file deploy/azure/secret-access.bicep --outfile /tmp/qiankui-secret-access.json
+          az bicep build --file deploy/azure/app.bicep --outfile /tmp/qiankui-app.json

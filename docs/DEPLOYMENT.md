@@ -1,6 +1,6 @@
 # 潜逵部署之法
 
-本文分“近端”与“置邮”二处。近端在使用者电脑，置邮在自有或获准使用之 Linux 服务器。项目不指定云商，普通 VPS、云主机或自管虚拟机皆可。
+本文分“近端”与“置邮”二处。近端在使用者电脑，置邮可在自有或获准使用之 Linux 服务器，亦可用项目所备的 Azure Container Apps。日本东部容器部署详见 [Azure 置邮之法](AZURE.md)。
 
 ## 一、职责分界
 
@@ -9,6 +9,8 @@
 | 本机 | `qiankui` | 监听本机 SOCKS5，将 TCP 请求送往置邮 | 默认仅 `127.0.0.1:1080` |
 | 服务器 | `qiankui-relay` | 终止 TLS、验证符节、连接获准目标 | 建议公网 TCP 443 |
 | 开发机/CI | Cargo 与源码 | 构建、测试 | 无 |
+
+若用 Azure Container Apps，公网入口因平台之限改为 TCP `8443`；程序仍在容器内自行终止 TLS。
 
 正式部署后，服务器不需要 Node.js，也不需要保存项目源码；若上传已构建的 Linux 二进制，亦不需要 Rust。
 
@@ -120,6 +122,14 @@ export QIANKUI_TOKEN='与服务器相同的符节'
 
 ```sh
 curl --proxy socks5h://127.0.0.1:1080 https://example.com
+```
+
+亦可一次写入本机简牍，此后径行 `qiankui`：
+
+```sh
+qiankui config init --relay https://relay.example.com:8443
+qiankui config show
+qiankui
 ```
 
 ## 七、上线核对

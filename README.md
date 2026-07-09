@@ -23,7 +23,7 @@
 qiankui                    本地运行
   │ TLS 1.3 + HTTP CONNECT
   ▼
-qiankui-relay（置邮）       VPS / 云服务器运行
+qiankui-relay（置邮）       Azure Container Apps / 自有服务器运行
   │ TCP
   ▼
 所往之服务
@@ -31,13 +31,13 @@ qiankui-relay（置邮）       VPS / 云服务器运行
 
 本机惟需 `qiankui`；远机惟需 `qiankui-relay`。二者可由同一源码分别编成，运行时皆不需 Cargo，亦不需 Rust 工具链。一条 SOCKS5 连接，今对应一条 TLS 连接；此法未能复用，然简而易察，足以验通全程。
 
-置邮不系于某家云商。凡自有或获允使用之 Linux 主机，具公网地址、域名、可信 TLS 证书及可放行之 TCP 端口者，皆可置之。详见 [部署之法](docs/DEPLOYMENT.md)。
+置邮不系于某家云商。今备二法：其一为寻常 Linux 主机，其二为 Azure 日本东部之 Container App。后者以 Key Vault 藏符节与私钥，以 GitHub OIDC 发版，不造久存之云端密码。详见 [部署之法](docs/DEPLOYMENT.md) 与 [Azure 置邮](docs/AZURE.md)。
 
 ## 所具
 
 - Rust 1.97.0，惟构建与开发时方需
 - OpenSSL，惟生成试用证书时方需
-- 一台自有或获准使用之远端主机，惟正式跨机使用时方需
+- 一台自有或获准使用之远端主机，或己有之 Azure 订阅，惟正式跨机使用时方需
 
 取源码后先校验：
 
@@ -82,14 +82,44 @@ curl --proxy socks5h://127.0.0.1:1080 https://example.com
 
 若置邮在远机，当以公认 CA 所署之证书及域名代试用证书；近端则不必传 `--ca`。`--insecure` 仅供仓促联调，勿用于常行。
 
+## 简牍
+
+近端可立简牍，免每起皆列诸参数。初立时若不传 `--token`，则隐字问符节：
+
+```sh
+qiankui config init \
+  --relay https://relay.example.com:8443 \
+  --ca ~/.config/qiankui/ca.pem
+```
+
+察之而不泄符节：
+
+```sh
+qiankui config show
+qiankui config path
+```
+
+既立，径行一令即可：
+
+```sh
+qiankui
+```
+
+简牍默认在 `~/.config/qiankui/config.toml`，其权为 `0600`；目录权为 `0700`。`--config` 或 `QIANKUI_CONFIG` 可易其所在。命令行参数与 `QIANKUI_TOKEN` 可暂覆简牍，而不改其文。
+
 ## 号令
 
 近端：
 
 ```text
+config init            新立简牍；缺符节时隐字问之
+config show            示简牍而隐符节
+config path            示简牍所在
+run                    依简牍起径；省略子命令亦同
+--config <toml>        易简牍所在
 --listen <host:port>   所守之 SOCKS5 地址，默认为 127.0.0.1:1080
 --relay <https-url>    置邮地址
---token <secret>       符节；亦可取自 QIANKUI_TOKEN
+--token <secret>       符节；宜改用简牍或 QIANKUI_TOKEN
 --ca <pem>             自署 CA 或证书
 --insecure             不验置邮证书，仅供试验
 --connect-timeout <ms> 连接限时，默认为 10000
@@ -148,6 +178,6 @@ make release
 
 1. 以 HTTP/2 `CONNECT` 替今之逐流 TLS。
 2. 为殊途定稳固之能力表与错误语义。
-3. 增配置文件、短期凭证与证书轮换。
+3. 增短期凭证与自动证书轮换。
 4. 研 HTTP/3/MASQUE 与 UDP，仍不用自造密码。
-5. 最后方议 TUN、图形界面、节点编排与云商部署。
+5. 再议 TUN、图形界面与多节点编排。

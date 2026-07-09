@@ -1,0 +1,23 @@
+services:
+  relay:
+    build:
+      context: .
+    image: qiankui-relay:local
+    command:
+      - --listen
+      - 0.0.0.0:8443
+      - --cert
+      - /run/qiankui/cert.pem
+      - --key
+      - /run/qiankui/key.pem
+      - --ports
+      - 80,443
+    environment:
+      QIANKUI_TOKEN: ${QIANKUI_TOKEN:?QIANKUI_TOKEN is required}
+    ports:
+      - "8443:8443/tcp"
+    read_only: true
+    restart: unless-stopped
+    volumes:
+      - ./var/dev-cert.pem:/run/qiankui/cert.pem:ro
+      - ./var/dev-key.pem:/run/qiankui/key.pem:ro

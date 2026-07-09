@@ -11,11 +11,14 @@ default-run = "qiankui"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+rpassword = "7"
+serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+toml = "0.9"
 url = "2"
 webpki-roots = "1"
 

@@ -1,4 +1,8 @@
 target/
 var/
+.env
+*.pem
+*.key
+*.pfx
 *.log
 .DS_Store

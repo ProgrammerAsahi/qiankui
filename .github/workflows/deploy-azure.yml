@@ -1,0 +1,122 @@
+name: Deploy Azure
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: qiankui-azure-production
+  cancel-in-progress: false
+
+env:
+  RESOURCE_GROUP: qiankui
+  APP_NAME: qiankui
+  IMAGE_REPOSITORY: qiankui-relay
+  DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Check out verified revision
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve registry
+        id: registry
+        shell: bash
+        run: |
+          registry_name="${{ vars.AZURE_ACR_NAME }}"
+          if [[ ! "$registry_name" =~ ^[a-z0-9]{5,50}$ ]]; then
+            printf 'AZURE_ACR_NAME is missing or invalid\n' >&2
+            exit 1
+          fi
+          login_server="$registry_name.azurecr.io"
+          image="$login_server/$IMAGE_REPOSITORY:$DEPLOY_SHA"
+          echo "name=$registry_name" >>"$GITHUB_OUTPUT"
+          echo "image=$image" >>"$GITHUB_OUTPUT"
+          az acr login --name "$registry_name"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build and push relay image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.registry.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Deploy immutable image
+        shell: bash
+        run: |
+          az containerapp update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$APP_NAME" \
+            --image "${{ steps.registry.outputs.image }}" \
+            --revision-suffix "${DEPLOY_SHA:0:8}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --output none
+
+      - name: Verify active revision
+        shell: bash
+        run: |
+          revision="$(az containerapp show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$APP_NAME" \
+            --query properties.latestRevisionName \
+            --output tsv)"
+          for attempt in $(seq 1 30); do
+            health="$(az containerapp revision show \
+              --resource-group "$RESOURCE_GROUP" \
+              --name "$APP_NAME" \
+              --revision "$revision" \
+              --query properties.healthState \
+              --output tsv)"
+            state="$(az containerapp revision show \
+              --resource-group "$RESOURCE_GROUP" \
+              --name "$APP_NAME" \
+              --revision "$revision" \
+              --query properties.runningState \
+              --output tsv)"
+            if [[ "$health" == "Healthy" \
+              && ( "$state" == "Running" || "$state" == "RunningAtMaxScale" ) ]]; then
+              az containerapp show \
+                --resource-group "$RESOURCE_GROUP" \
+                --name "$APP_NAME" \
+                --query "{fqdn:properties.configuration.ingress.fqdn,revision:properties.latestReadyRevisionName}" \
+                --output table
+              exit 0
+            fi
+            if [[ "$state" == "Failed" ]]; then
+              printf 'Revision %s failed\n' "$revision" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          printf 'Revision %s did not become healthy in time\n' "$revision" >&2
+          exit 1

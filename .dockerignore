@@ -1,0 +1,14 @@
+.git
+.github
+target
+var
+outputs
+*.log
+.DS_Store
+.env
+compose.yaml
+docs
+deploy
+README.md
+LICENSE
+Makefile
