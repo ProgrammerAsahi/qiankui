@@ -1,83 +1,148 @@
-# 潜逵
+# Qiankui (潜逵)
 
-> 潜逵傍通，殊途同归。
+**English** | [文言](README.wy.md)
 
-潜逵者，私网通流之小器也。近端为径，受 SOCKS5 之请；远端置邮，验其符节，而后通于所往。其间以 TLS 1.3 蔽护，以 HTTP `CONNECT` 通行。今制务简，惟行 TCP，不设中枢，不蓄名籍，不为公门。
+> Hidden ways converge; different paths reach the same destination.
 
-此为 v0.1.0，悉以 Rust 成之。所求惟三：可起、可通、可易。所谓可易者，近端之径与远端之邮，不知传输之细；异日若易 HTTP/2、HTTP/3 或他途，惟更“殊途”一部而已。
+Qiankui is a small, self-hosted private networking relay written in Rust. A local client accepts SOCKS5 connections, forwards each TCP stream through TLS 1.3 and HTTP `CONNECT`, and asks a remote relay to connect to the destination after authenticating the client.
 
-## 名物
+Version 0.1.0 deliberately keeps the system small and inspectable. It supports TCP, one TLS connection per proxied stream, a single bearer token, and a replaceable transport boundary. It does not yet provide UDP, TUN, system-wide routing, PAC rules, multiplexing, or a control plane.
 
-- **潜逵**：总名。郭璞《江赋》有“潜逵傍通”。
-- **殊途**（`src/shutu`）：承载传输之法。今仅有 TLS 上之 HTTP `CONNECT`。
-- **置邮**（`src/zhiyou.rs`）：远端中继。古者置邮传命，站站相续。
-- **符节**（`src/fujie`）：所持之凭信，兼辖出口之禁限。
-- **径**（`src/socks5.rs`）：近端 SOCKS5 入口。
-
-## 两端
+## Architecture
 
 ```text
-本机应用
-  │ SOCKS5
-  ▼
-qiankui                    本地运行
-  │ TLS 1.3 + HTTP CONNECT
-  ▼
-qiankui-relay（置邮）       Azure Container Apps / 自有服务器运行
-  │ TCP
-  ▼
-所往之服务
+Local application
+  | SOCKS5
+  v
+qiankui                         runs on your computer
+  | TLS 1.3 + HTTP CONNECT
+  v
+qiankui-relay                   Azure Container Apps or your own server
+  | TCP
+  v
+Destination service
 ```
 
-本机惟需 `qiankui`；远机惟需 `qiankui-relay`。二者可由同一源码分别编成，运行时皆不需 Cargo，亦不需 Rust 工具链。一条 SOCKS5 连接，今对应一条 TLS 连接；此法未能复用，然简而易察，足以验通全程。
+Only `qiankui` belongs on the client computer. Only `qiankui-relay` belongs on the server. Neither binary needs Cargo or a Rust toolchain at runtime.
 
-置邮不系于某家云商。今备二法：其一为寻常 Linux 主机，其二为 Azure 多地之 Container App。后者共用 ACR、Key Vault 与身份，而每地自有网络、入口与置邮；以 GitHub OIDC 发版，不造久存之云端密码。详见 [部署之法](docs/DEPLOYMENT.md) 与 [Azure 置邮](docs/AZURE.md)。
+The current client is an application-level SOCKS5 proxy, not a global or smart-routing proxy. Configure individual applications to use `127.0.0.1:1080`; applications that do not use that SOCKS5 endpoint keep their normal network path.
 
-## 所具
+## Install
 
-- Rust 1.97.0，惟构建与开发时方需
-- OpenSSL，惟生成试用证书时方需
-- 一台自有或获准使用之远端主机，或己有之 Azure 订阅，惟正式跨机使用时方需
-
-取源码后先校验：
-
-```sh
-cargo test --all-targets
-```
-
-## 取器
-
-若为 Apple Silicon 之 Mac，宜由 Homebrew 取近端：
+The packaged client currently supports Apple Silicon Macs:
 
 ```sh
 brew install ProgrammerAsahi/qiankui/qiankui
 ```
 
-亦可自 [GitHub Releases](https://github.com/ProgrammerAsahi/qiankui/releases) 取 `qiankui-aarch64-apple-darwin`。今所发成包惟 macOS arm64；置邮不在此包中，仍依后文自建或由 Azure 流水线部署。
+You may also download `qiankui-aarch64-apple-darwin` from [GitHub Releases](https://github.com/ProgrammerAsahi/qiankui/releases). Server binaries are not included in the client package.
 
-察新章而不取之：
+Check for updates:
 
 ```sh
 qiankui update --check
 ```
 
-若由 GitHub 成品直装，可自更新：
+Clients installed directly from GitHub can update themselves:
 
 ```sh
 qiankui update
 ```
 
-其法先验 Minisign 署名，继验字节数、SHA-256 与成品自报之版本，而后原子易旧本；一验不合，毫末不改。若本由 Homebrew 所置，此令会示以 `brew upgrade ProgrammerAsahi/qiankui/qiankui`，不越俎代庖。发章诸制详见 [发章之法](docs/RELEASE.md)。
+Homebrew installations remain managed by Homebrew. When a newer release exists, the client directs you to:
 
-## 初试
+```sh
+brew upgrade ProgrammerAsahi/qiankui/qiankui
+```
 
-先造试用证书：
+Update manifests are signed with Minisign. The client verifies the manifest signature, artifact size, SHA-256 digest, and reported binary version before atomically replacing an executable. See [Release process](docs/RELEASE.md) for the complete publishing model.
+
+## Quick Start
+
+### Included Azure deployment
+
+If you deployed Qiankui with the included Azure infrastructure and your Azure account can read its Key Vault, the repository helper performs the client setup in one command:
+
+```sh
+az login
+deploy/azure/configure-client.sh --region japaneast
+```
+
+The helper discovers the regional Container App endpoint, downloads the private CA certificate and relay token from Key Vault, and writes the client configuration to `~/.config/qiankui/config.toml`. It never prints the token. The current helper installs the client from the checked-out source, so this path requires Git and the pinned Rust toolchain.
+
+Start the proxy:
+
+```sh
+qiankui
+```
+
+Test it from another terminal:
+
+```sh
+curl --proxy socks5h://127.0.0.1:1080 https://example.com
+```
+
+Use `socks5h://` when possible so destination DNS resolution happens through the relay.
+
+### Any self-hosted relay
+
+Initialize the client once. If `--token` is omitted, Qiankui prompts for it without echoing it:
+
+```sh
+qiankui config init \
+  --relay https://relay.example.com:8443
+```
+
+For a relay certificate issued by a private CA:
+
+```sh
+qiankui config init \
+  --relay https://relay.example.com:8443 \
+  --ca ~/.config/qiankui/relay-ca.pem
+```
+
+After initialization, daily use is simply:
+
+```sh
+qiankui
+```
+
+Inspect the effective stored configuration without revealing the token:
+
+```sh
+qiankui config show
+qiankui config path
+```
+
+The default configuration file is `~/.config/qiankui/config.toml`. Qiankui creates the directory with mode `0700` and the file with mode `0600`. `--config` or `QIANKUI_CONFIG` selects another file. Command-line options and `QIANKUI_TOKEN` can temporarily override stored values without rewriting the file.
+
+## Client Options
+
+```text
+config init            Create or replace the local configuration
+config show            Show configuration with the token redacted
+config path            Print the configuration path
+run                    Start the SOCKS5 listener; also the default command
+update                 Verify and install a newer signed client release
+update --check         Check for an update without installing it
+--config <toml>        Use a different configuration file
+--listen <host:port>   SOCKS5 listener; default 127.0.0.1:1080
+--relay <https-url>    Relay endpoint
+--token <secret>       Bearer token; prefer the config file or QIANKUI_TOKEN
+--ca <pem>             Private CA certificate or self-signed certificate
+--insecure             Disable TLS verification for local testing only
+--connect-timeout <ms> Connection timeout; default 10000
+```
+
+## Local End-to-End Test
+
+Create a temporary development certificate:
 
 ```sh
 make dev-cert
 ```
 
-另开一窗，起置邮：
+Start a local relay:
 
 ```sh
 export QIANKUI_TOKEN='change-this-token-at-least-16-bytes'
@@ -88,7 +153,7 @@ cargo run --bin qiankui-relay -- \
   --ports 80,443
 ```
 
-再开一窗，起近端之径：
+In another terminal, start the client:
 
 ```sh
 export QIANKUI_TOKEN='change-this-token-at-least-16-bytes'
@@ -98,93 +163,46 @@ cargo run --bin qiankui -- \
   --ca var/dev-cert.pem
 ```
 
-乃试之：
+Then test the complete path:
 
 ```sh
 curl --proxy socks5h://127.0.0.1:1080 https://example.com
 ```
 
-若置邮在远机，当以公认 CA 所署之证书及域名代试用证书；近端则不必传 `--ca`。`--insecure` 仅供仓促联调，勿用于常行。
+`--insecure` exists only for short-lived local debugging. Do not use it for normal operation.
 
-## 简牍
+## Relay Deployment
 
-近端可立简牍，免每起皆列诸参数。初立时若不传 `--token`，则隐字问符节：
+Qiankui does not depend on a specific cloud provider. The repository contains two deployment paths:
 
-```sh
-qiankui config init \
-  --relay https://relay.example.com:8443 \
-  --ca ~/.config/qiankui/ca.pem
-```
+- A conventional Linux host with a systemd unit: [Deployment guide](docs/DEPLOYMENT.md)
+- Multi-region Azure Container Apps with shared ACR, Key Vault, managed identities, and GitHub OIDC: [Azure guide](docs/AZURE.md)
 
-察之而不泄符节：
+The Azure layout builds the relay image once, then deploys it to every configured region. Shared resources live in `qiankui-shared`; regional resources use `qiankui-<region>` and `qiankui-infra-<region>` naming.
 
-```sh
-qiankui config show
-qiankui config path
-```
-
-既立，径行一令即可：
-
-```sh
-qiankui
-```
-
-简牍默认在 `~/.config/qiankui/config.toml`，其权为 `0600`；目录权为 `0700`。`--config` 或 `QIANKUI_CONFIG` 可易其所在。命令行参数与 `QIANKUI_TOKEN` 可暂覆简牍，而不改其文。
-
-## 号令
-
-近端：
+Relay options:
 
 ```text
-config init            新立简牍；缺符节时隐字问之
-config show            示简牍而隐符节
-config path            示简牍所在
-run                    依简牍起径；省略子命令亦同
-update                 验署而自更新；Homebrew 所装之本仍归 brew 掌管
-update --check         惟察有无新章，不下载安装
---config <toml>        易简牍所在
---listen <host:port>   所守之 SOCKS5 地址，默认为 127.0.0.1:1080
---relay <https-url>    置邮地址
---token <secret>       符节；宜改用简牍或 QIANKUI_TOKEN
---ca <pem>             自署 CA 或证书
---insecure             不验置邮证书，仅供试验
---connect-timeout <ms> 连接限时，默认为 10000
+--listen <host:port>   Listener; default 0.0.0.0:8443
+--cert <pem>           TLS certificate
+--key <pem>            TLS private key
+--token <secret>       Bearer token; may come from QIANKUI_TOKEN
+--ports <list>         Allowed destination ports; default 80,443
+--allow-private        Permit private, loopback, and reserved destinations
+--connect-timeout <ms> Outbound connection timeout; default 10000
 ```
 
-置邮：
+## Security Boundaries
 
-```text
---listen <host:port>   所守地址，默认为 0.0.0.0:8443
---cert <pem>           TLS 证书
---key <pem>            TLS 私钥
---token <secret>       符节；亦可取自 QIANKUI_TOKEN
---ports <list>         所许目的端口，默认为 80,443
---allow-private        许往私网、回环与保留地址；默认严禁
---connect-timeout <ms> 出口连接限时，默认为 10000
-```
+The relay always authenticates a token. By default it allows only destination ports 80 and 443 and rejects private, loopback, link-local, and reserved addresses. This prevents an accidentally exposed relay from becoming an unauthenticated open proxy or an internal-network probe.
 
-## 构建
+Qiankui does not log destination hostnames. Operational logs cover startup, shutdown, and failures needed to run the service.
 
-```sh
-cargo build --release --locked
-```
+Run relays only on systems and networks you own or are explicitly authorized to use. Do not expose anonymous relays, and review the laws and provider terms that apply to your deployment.
 
-其成品在：
+## Build and Test
 
-```text
-target/release/qiankui
-target/release/qiankui-relay
-```
-
-不同操作系统与处理器须各自构建。欲部署 Linux 服务器，宜在同架构 Linux 主机或 Linux CI 上构建 `qiankui-relay`，不可将 macOS 成品径投 Linux。
-
-## 戒约
-
-置邮必验符节，且默认仅许 80、443，并拒私网、回环、链路本地及保留地址，以免沦为无主之公门或内网探针。程序不记所往域名，日志惟录启止。
-
-此器惟宜用于己有之机、己辖之网，或明获允准之试验。毋设匿名开放中继，毋以侵人，亦当自察所在之法令与云商条款。
-
-## 校验
+Qiankui requires Rust 1.97.0 for development:
 
 ```sh
 make check
@@ -192,18 +210,33 @@ make test
 make release
 ```
 
-端到端之试自造短期证书，依次起回声服务、置邮与 SOCKS5 入口，而验符节拒纳、字节往返及半闭之义。
+Release binaries are written to:
 
-## 许可
+```text
+target/release/qiankui
+target/release/qiankui-relay
+```
 
-此器以 Apache License 2.0 授人用之、改之、传之。其文具载于 [`LICENSE`](LICENSE)。
+Build server binaries on the target operating system and architecture. A macOS binary cannot run on a Linux server.
 
-## 后章
+## Names
 
-初章既通，宜依次为之：
+The source tree uses terms drawn from classical Chinese literature:
 
-1. 以 HTTP/2 `CONNECT` 替今之逐流 TLS。
-2. 为殊途定稳固之能力表与错误语义。
-3. 增短期凭证与自动证书轮换。
-4. 研 HTTP/3/MASQUE 与 UDP，仍不用自造密码。
-5. 再议 TUN、图形界面与多节点编排。
+- **Qiankui / 潜逵**: the project; from Guo Pu's *Rhapsody on the Yangtze*, “潜逵傍通”.
+- **Shutu / 殊途** (`src/shutu`): replaceable transport paths.
+- **Zhiyou / 置邮** (`src/zhiyou.rs`): the remote relay, named after ancient courier stations.
+- **Fujie / 符节** (`src/fujie`): authentication credentials and egress policy.
+- **Jing / 径** (`src/socks5.rs`): the local SOCKS5 entrance.
+
+## Roadmap
+
+1. Replace one-TLS-connection-per-stream transport with HTTP/2 `CONNECT` multiplexing.
+2. Stabilize transport capabilities and error semantics.
+3. Add short-lived credentials and automated certificate rotation.
+4. Explore HTTP/3, MASQUE, and UDP without inventing custom cryptography.
+5. Add TUN, graphical clients, and multi-node orchestration after the transport core is mature.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
