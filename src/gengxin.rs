@@ -257,8 +257,9 @@ fn install_candidate(path: &Path, binary: &[u8], version: &Version) -> anyhow::R
         .set_permissions(fs::Permissions::from_mode(mode))?;
     candidate.write_all(binary)?;
     candidate.as_file().sync_all()?;
+    let candidate = candidate.into_temp_path();
 
-    let output = Command::new(candidate.path())
+    let output = Command::new(&candidate)
         .arg("--version")
         .output()
         .context("downloaded client could not be executed")?;
