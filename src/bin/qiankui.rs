@@ -11,6 +11,7 @@ use anyhow::{Context, bail};
 use clap::{Args as ClapArgs, Parser, Subcommand};
 use qiankui::{
     fujie::Token,
+    gengxin::{self, UpdateStatus},
     jiandu::{self, ClientConfig},
     runtime::shutdown_signal,
     shutu::HttpConnectTransport,
@@ -68,6 +69,12 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// 察新章，验其署而自更新
+    Update {
+        /// 惟察有无新章，不下载安装
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -90,21 +97,60 @@ enum ConfigCommand {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    match dispatch(Args::parse()).await {
+    let args = Args::parse();
+    let updating = matches!(&args.command, Some(Command::Update { .. }));
+    match dispatch(args).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("潜逵未起：{error:#}");
+            if updating {
+                eprintln!("潜逵更新未成：{error:#}");
+            } else {
+                eprintln!("潜逵未起：{error:#}");
+            }
             ExitCode::FAILURE
         }
     }
 }
 
 async fn dispatch(args: Args) -> anyhow::Result<()> {
-    let config_path = args.config.map(Ok).unwrap_or_else(jiandu::default_path)?;
-    match args.command {
-        Some(Command::Config { command }) => handle_config(command, &config_path, args.proxy),
-        Some(Command::Run) | None => run_proxy(&config_path, args.proxy).await,
+    let Args {
+        config,
+        proxy,
+        command,
+    } = args;
+    match command {
+        Some(Command::Update { check }) => handle_update(check),
+        command => {
+            let config_path = config.map(Ok).unwrap_or_else(jiandu::default_path)?;
+            match command {
+                Some(Command::Config { command }) => handle_config(command, &config_path, proxy),
+                Some(Command::Run) | None => run_proxy(&config_path, proxy).await,
+                Some(Command::Update { .. }) => unreachable!(),
+            }
+        }
     }
+}
+
+fn handle_update(check_only: bool) -> anyhow::Result<()> {
+    match gengxin::update(check_only)? {
+        UpdateStatus::UpToDate { current, latest } if current == latest => {
+            println!("潜逵 {current} 已是最新。");
+        }
+        UpdateStatus::UpToDate { current, latest } => {
+            println!("本机为 {current}，较所署稳定章 {latest} 为新；未作改动。");
+        }
+        UpdateStatus::Available { current, latest } => {
+            println!("有新章 {latest}（今为 {current}）；署名与清单皆已验明。");
+        }
+        UpdateStatus::ManagedByHomebrew { current, latest } => {
+            println!("有新章 {latest}（今为 {current}）。此本由 Homebrew 掌管，请行：");
+            println!("brew upgrade ProgrammerAsahi/qiankui/qiankui");
+        }
+        UpdateStatus::Updated { previous, current } => {
+            println!("潜逵已由 {previous} 更新至 {current}。");
+        }
+    }
+    Ok(())
 }
 
 fn handle_config(

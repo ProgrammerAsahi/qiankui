@@ -45,6 +45,30 @@ qiankui-relay（置邮）       Azure Container Apps / 自有服务器运行
 cargo test --all-targets
 ```
 
+## 取器
+
+若为 Apple Silicon 之 Mac，宜由 Homebrew 取近端：
+
+```sh
+brew install ProgrammerAsahi/qiankui/qiankui
+```
+
+亦可自 [GitHub Releases](https://github.com/ProgrammerAsahi/qiankui/releases) 取 `qiankui-aarch64-apple-darwin`。今所发成包惟 macOS arm64；置邮不在此包中，仍依后文自建或由 Azure 流水线部署。
+
+察新章而不取之：
+
+```sh
+qiankui update --check
+```
+
+若由 GitHub 成品直装，可自更新：
+
+```sh
+qiankui update
+```
+
+其法先验 Minisign 署名，继验字节数、SHA-256 与成品自报之版本，而后原子易旧本；一验不合，毫末不改。若本由 Homebrew 所置，此令会示以 `brew upgrade ProgrammerAsahi/qiankui/qiankui`，不越俎代庖。发章诸制详见 [发章之法](docs/RELEASE.md)。
+
 ## 初试
 
 先造试用证书：
@@ -116,6 +140,8 @@ config init            新立简牍；缺符节时隐字问之
 config show            示简牍而隐符节
 config path            示简牍所在
 run                    依简牍起径；省略子命令亦同
+update                 验署而自更新；Homebrew 所装之本仍归 brew 掌管
+update --check         惟察有无新章，不下载安装
 --config <toml>        易简牍所在
 --listen <host:port>   所守之 SOCKS5 地址，默认为 127.0.0.1:1080
 --relay <https-url>    置邮地址

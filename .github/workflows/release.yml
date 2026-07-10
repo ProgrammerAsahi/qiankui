@@ -1,0 +1,304 @@
+name: Release Client
+
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: qiankui-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TARGET: aarch64-apple-darwin
+
+jobs:
+  macos-arm64:
+    runs-on: macos-14
+    environment: release
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate release version
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "qiankui") | .version')"
+          if [[ -z "$version" || "v$version" != "$GITHUB_REF_NAME" ]]; then
+            printf 'Tag %s does not match Cargo version %s\n' "$GITHUB_REF_NAME" "$version" >&2
+            exit 1
+          fi
+          printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
+
+      - name: Resolve existing release
+        id: release_state
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if release="$(gh release view "$GITHUB_REF_NAME" --json isDraft)"; then
+            if [[ "$(jq -r '.isDraft' <<<"$release")" == "true" ]]; then
+              state="draft"
+            else
+              state="published"
+            fi
+            mkdir -p dist
+            gh release download "$GITHUB_REF_NAME" --dir dist
+          else
+            state="absent"
+          fi
+          printf 'state=%s\n' "$state" >>"$GITHUB_OUTPUT"
+
+      - name: Install pinned Rust target
+        run: rustup target add "$TARGET"
+
+      - name: Test release revision
+        run: cargo test --all-targets --locked
+
+      - name: Build macOS arm64 client
+        run: cargo build --release --locked --bin qiankui --target "$TARGET"
+
+      - name: Verify runner and binary architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          file "target/$TARGET/release/qiankui" | grep -q 'Mach-O 64-bit executable arm64'
+          "target/$TARGET/release/qiankui" --version | grep -qx "qiankui ${{ steps.release.outputs.version }}"
+
+      - name: Package client and update manifest
+        id: package
+        if: steps.release_state.outputs.state == 'absent'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.release.outputs.version }}"
+          archive="qiankui-v${version}-${TARGET}.tar.gz"
+          artifact="qiankui-${TARGET}"
+          artifact_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${artifact}"
+
+          mkdir -p dist stage
+          install -m 0755 "target/$TARGET/release/qiankui" "stage/qiankui"
+          install -m 0644 README.md LICENSE stage/
+          COPYFILE_DISABLE=1 tar -C stage -czf "dist/$archive" qiankui README.md LICENSE
+          install -m 0755 "target/$TARGET/release/qiankui" "dist/$artifact"
+
+          artifact_sha256="$(shasum -a 256 "dist/$artifact" | awk '{print $1}')"
+          artifact_size="$(stat -f '%z' "dist/$artifact")"
+          published_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          jq -n \
+            --arg version "$version" \
+            --arg published_at "$published_at" \
+            --arg target "$TARGET" \
+            --arg url "$artifact_url" \
+            --arg sha256 "$artifact_sha256" \
+            --argjson size "$artifact_size" \
+            '{
+              schema_version: 1,
+              channel: "stable",
+              version: $version,
+              published_at: $published_at,
+              artifacts: {
+                ($target): {
+                  url: $url,
+                  sha256: $sha256,
+                  size: $size
+                }
+              }
+            }' >dist/qiankui-update.json
+
+          archive_sha256="$(shasum -a 256 "dist/$archive" | awk '{print $1}')"
+          printf 'archive=%s\n' "$archive" >>"$GITHUB_OUTPUT"
+          printf 'archive_sha256=%s\n' "$archive_sha256" >>"$GITHUB_OUTPUT"
+
+      - name: Install Minisign
+        run: brew install minisign
+
+      - name: Sign and verify update manifest
+        if: steps.release_state.outputs.state == 'absent'
+        shell: bash
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$MINISIGN_SECRET_KEY"
+          test -n "$MINISIGN_PASSWORD"
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s\n' "$MINISIGN_SECRET_KEY" >"$key_file"
+          chmod 600 "$key_file"
+          export MINISIGN_KEY_FILE="$key_file"
+
+          /usr/bin/expect <<'EXPECT'
+          log_user 0
+          set timeout 120
+          spawn minisign -S -s $env(MINISIGN_KEY_FILE) -m dist/qiankui-update.json -x dist/qiankui-update.json.minisig -t "qiankui stable $env(GITHUB_REF_NAME)"
+          expect "Password: "
+          send -- "$env(MINISIGN_PASSWORD)\r"
+          expect eof
+          catch wait result
+          exit [lindex $result 3]
+          EXPECT
+
+          minisign -Vm dist/qiankui-update.json \
+            -x dist/qiankui-update.json.minisig \
+            -p packaging/qiankui-release.pub
+          (
+            cd dist
+            shasum -a 256 \
+              "qiankui-$TARGET" \
+              "${{ steps.package.outputs.archive }}" \
+              qiankui-update.json \
+              qiankui-update.json.minisig >SHA256SUMS
+          )
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title="潜逵 $GITHUB_REF_NAME"
+          state="${{ steps.release_state.outputs.state }}"
+          if [[ "$state" == "absent" ]]; then
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --draft \
+              --verify-tag \
+              --title "$title" \
+              --generate-notes
+          fi
+          if [[ "$state" != "published" ]]; then
+            gh release edit "$GITHUB_REF_NAME" \
+              --draft=false \
+              --title "$title" \
+              --latest
+          fi
+
+      - name: Verify immutable release and assets
+        id: assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.release.outputs.version }}"
+          archive="qiankui-v${version}-${TARGET}.tar.gz"
+          artifact="qiankui-${TARGET}"
+          artifact_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${artifact}"
+
+          verified=false
+          for _ in $(seq 1 12); do
+            if gh release verify "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              verified=true
+              break
+            fi
+            sleep 5
+          done
+          if [[ "$verified" != "true" ]]; then
+            printf 'GitHub did not attest an immutable release in time\n' >&2
+            exit 1
+          fi
+
+          minisign -Vm dist/qiankui-update.json \
+            -x dist/qiankui-update.json.minisig \
+            -p packaging/qiankui-release.pub
+          (
+            cd dist
+            shasum -a 256 -c SHA256SUMS
+          )
+
+          artifact_sha256="$(shasum -a 256 "dist/$artifact" | awk '{print $1}')"
+          artifact_size="$(stat -f '%z' "dist/$artifact")"
+          jq -e \
+            --arg version "$version" \
+            --arg target "$TARGET" \
+            --arg url "$artifact_url" \
+            --arg sha256 "$artifact_sha256" \
+            --argjson size "$artifact_size" \
+            '.schema_version == 1
+              and .channel == "stable"
+              and .version == $version
+              and .artifacts[$target].url == $url
+              and .artifacts[$target].sha256 == $sha256
+              and .artifacts[$target].size == $size' \
+            dist/qiankui-update.json
+
+          archive_sha256="$(shasum -a 256 "dist/$archive" | awk '{print $1}')"
+          printf 'archive=%s\n' "$archive" >>"$GITHUB_OUTPUT"
+          printf 'archive_sha256=%s\n' "$archive_sha256" >>"$GITHUB_OUTPUT"
+
+      - name: Update Homebrew tap
+        shell: bash
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          HOMEBREW_TAP_KEY_PASSWORD: ${{ secrets.HOMEBREW_TAP_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$HOMEBREW_TAP_DEPLOY_KEY"
+          test -n "$HOMEBREW_TAP_KEY_PASSWORD"
+
+          key_file="$RUNNER_TEMP/homebrew-tap-key"
+          askpass="$RUNNER_TEMP/homebrew-tap-askpass"
+          printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" >"$key_file"
+          chmod 600 "$key_file"
+          cat >"$askpass" <<'ASKPASS'
+          #!/bin/sh
+          printf '%s\n' "$HOMEBREW_TAP_KEY_PASSWORD"
+          ASKPASS
+          chmod 700 "$askpass"
+
+          eval "$(ssh-agent -s)"
+          trap 'ssh-agent -k >/dev/null; rm -f "$key_file" "$askpass"' EXIT
+          SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=qiankui \
+            ssh-add "$key_file" </dev/null
+          mkdir -p "$HOME/.ssh"
+          curl --fail --silent --show-error https://api.github.com/meta \
+            | jq -r '.ssh_keys[] | "github.com " + .' >"$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+          git clone "git@github.com:ProgrammerAsahi/homebrew-qiankui.git" tap
+          mkdir -p tap/Formula
+          version="${{ steps.release.outputs.version }}"
+          archive="${{ steps.assets.outputs.archive }}"
+          archive_sha256="${{ steps.assets.outputs.archive_sha256 }}"
+          cat >tap/Formula/qiankui.rb <<FORMULA
+          class Qiankui < Formula
+            desc "Modular, self-hosted private networking relay client"
+            homepage "https://github.com/ProgrammerAsahi/qiankui"
+            url "https://github.com/ProgrammerAsahi/qiankui/releases/download/v${version}/${archive}"
+            version "${version}"
+            sha256 "${archive_sha256}"
+            license "Apache-2.0"
+
+            depends_on :macos
+            depends_on arch: :arm64
+
+            def install
+              bin.install "qiankui"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/qiankui --version")
+            end
+          end
+          FORMULA
+
+          ruby -c tap/Formula/qiankui.rb
+          git -C tap config user.name "github-actions[bot]"
+          git -C tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C tap add Formula/qiankui.rb
+          if git -C tap diff --cached --quiet; then
+            exit 0
+          fi
+          git -C tap commit -m "qiankui ${version}"
+          git -C tap push origin main

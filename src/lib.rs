@@ -1,4 +1,6 @@
 pub mod fujie;
+#[cfg(feature = "client-update")]
+pub mod gengxin;
 pub mod http_head;
 pub mod jiandu;
 pub mod runtime;

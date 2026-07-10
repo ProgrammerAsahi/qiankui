@@ -3,7 +3,7 @@ FROM rust:1.97-bookworm@sha256:7d0723df719e7f213b69dc7c8c595985c3f4b060cfbee4f7b
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN cargo build --release --locked --bin qiankui-relay
+RUN cargo build --release --locked --no-default-features --bin qiankui-relay
 
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:ce0d66bc0f64aae46e6a03add867b07f42cc7b8799c949c2e898057b7f75a151
 
