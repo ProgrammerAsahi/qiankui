@@ -28,8 +28,23 @@ jobs:
         run: cargo build --release --locked
       - name: Check Azure deployment scripts
         run: bash -n deploy/azure/*.sh
+      - name: Validate Azure region manifest
+        run: |
+          jq -e '
+            .schemaVersion == 1
+            and (.sharedLocation | type == "string" and length > 0)
+            and (.regions | type == "array" and length > 0)
+            and ([.regions[].slug] | length == (unique | length))
+            and all(.regions[];
+              (.slug | type == "string" and test("^[a-z0-9][a-z0-9-]*$"))
+              and (.location | type == "string" and length > 0)
+              and (.networkAddressPrefix | type == "string" and length > 0)
+              and (.infrastructureSubnetAddressPrefix | type == "string" and length > 0)
+            )
+          ' deploy/azure/regions.json
       - name: Compile Azure Bicep
         run: |
-          az bicep build --file deploy/azure/base.bicep --outfile /tmp/qiankui-base.json
+          az bicep build --file deploy/azure/shared.bicep --outfile /tmp/qiankui-shared.json
+          az bicep build --file deploy/azure/region.bicep --outfile /tmp/qiankui-region.json
           az bicep build --file deploy/azure/secret-access.bicep --outfile /tmp/qiankui-secret-access.json
           az bicep build --file deploy/azure/app.bicep --outfile /tmp/qiankui-app.json

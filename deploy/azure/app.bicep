@@ -6,35 +6,53 @@ param baseName string = 'qiankui'
 
 param location string = resourceGroup().location
 
+@description('Stable lowercase region identifier used in resource names and regional secret names.')
+param regionSlug string
+
+@description('Resource group containing shared ACR, Key Vault, and managed identities.')
+param sharedResourceGroupName string = '${baseName}-shared'
+
+param registryName string
+
+param keyVaultName string
+
+param runtimeIdentityName string = '${baseName}-runtime'
+
 @description('Immutable ACR image reference, preferably tagged with a Git commit SHA.')
 param image string
 
-var suffix = take(uniqueString(subscription().subscriptionId), 8)
-var registryName = '${baseName}${suffix}'
-var vaultName = '${baseName}-${suffix}'
+var environmentName = '${baseName}-${regionSlug}'
+var appName = '${baseName}-relay-${regionSlug}'
+var tlsCertificateSecretName = 'tls-cert-${regionSlug}'
+var tlsPrivateKeySecretName = 'tls-key-${regionSlug}'
 
 resource environment 'Microsoft.App/managedEnvironments@2025-01-01' existing = {
-  name: baseName
+  name: environmentName
 }
 
 resource registry 'Microsoft.ContainerRegistry/registries@2025-11-01' existing = {
+  scope: resourceGroup(sharedResourceGroupName)
   name: registryName
 }
 
 resource vault 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
-  name: vaultName
+  scope: resourceGroup(sharedResourceGroupName)
+  name: keyVaultName
 }
 
 resource runtimeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
-  name: baseName
+  scope: resourceGroup(sharedResourceGroupName)
+  name: runtimeIdentityName
 }
 
 resource app 'Microsoft.App/containerApps@2025-01-01' = {
-  name: baseName
+  name: appName
   location: location
   tags: {
     project: baseName
     managedBy: 'bicep-and-github-actions'
+    scope: 'regional'
+    region: regionSlug
   }
   identity: {
     type: 'UserAssigned'
@@ -62,12 +80,12 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = {
         }
         {
           name: 'tls-cert'
-          keyVaultUrl: '${vault.properties.vaultUri}secrets/tls-cert'
+          keyVaultUrl: '${vault.properties.vaultUri}secrets/${tlsCertificateSecretName}'
           identity: runtimeIdentity.id
         }
         {
           name: 'tls-key'
-          keyVaultUrl: '${vault.properties.vaultUri}secrets/tls-key'
+          keyVaultUrl: '${vault.properties.vaultUri}secrets/${tlsPrivateKeySecretName}'
           identity: runtimeIdentity.id
         }
       ]
@@ -88,7 +106,7 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = {
     template: {
       containers: [
         {
-          name: baseName
+          name: appName
           image: image
           args: [
             '--listen'
@@ -167,3 +185,4 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = {
 
 output fqdn string = app.properties.configuration.ingress.fqdn
 output endpoint string = 'https://${app.properties.configuration.ingress.fqdn}:8443'
+output appName string = app.name

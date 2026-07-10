@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "sharedLocation": "japaneast",
+  "regions": [
+    {
+      "slug": "japaneast",
+      "location": "japaneast",
+      "networkAddressPrefix": "10.42.0.0/24",
+      "infrastructureSubnetAddressPrefix": "10.42.0.0/27"
+    }
+  ]
+}

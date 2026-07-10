@@ -31,7 +31,7 @@ qiankui-relay（置邮）       Azure Container Apps / 自有服务器运行
 
 本机惟需 `qiankui`；远机惟需 `qiankui-relay`。二者可由同一源码分别编成，运行时皆不需 Cargo，亦不需 Rust 工具链。一条 SOCKS5 连接，今对应一条 TLS 连接；此法未能复用，然简而易察，足以验通全程。
 
-置邮不系于某家云商。今备二法：其一为寻常 Linux 主机，其二为 Azure 日本东部之 Container App。后者以 Key Vault 藏符节与私钥，以 GitHub OIDC 发版，不造久存之云端密码。详见 [部署之法](docs/DEPLOYMENT.md) 与 [Azure 置邮](docs/AZURE.md)。
+置邮不系于某家云商。今备二法：其一为寻常 Linux 主机，其二为 Azure 多地之 Container App。后者共用 ACR、Key Vault 与身份，而每地自有网络、入口与置邮；以 GitHub OIDC 发版，不造久存之云端密码。详见 [部署之法](docs/DEPLOYMENT.md) 与 [Azure 置邮](docs/AZURE.md)。
 
 ## 所具
 

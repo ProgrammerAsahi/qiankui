@@ -15,13 +15,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RESOURCE_GROUP: qiankui
-  APP_NAME: qiankui
+  BASE_NAME: qiankui
   IMAGE_REPOSITORY: qiankui-relay
   DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
-  deploy:
+  publish:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
@@ -29,11 +28,25 @@ jobs:
        github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     environment: production
+    outputs:
+      image: ${{ steps.registry.outputs.image }}
+      matrix: ${{ steps.regions.outputs.matrix }}
     steps:
       - name: Check out verified revision
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Resolve regional deployment matrix
+        id: regions
+        shell: bash
+        run: |
+          matrix="$(jq -c '{include: [.regions[] | {slug: .slug, location: .location}]}' deploy/azure/regions.json)"
+          if [[ "$(jq '.include | length' <<<"$matrix")" -eq 0 ]]; then
+            printf 'No Azure regions are configured\n' >&2
+            exit 1
+          fi
+          echo "matrix=$matrix" >>"$GITHUB_OUTPUT"
 
       - name: Sign in to Azure with OIDC
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
@@ -53,14 +66,13 @@ jobs:
           fi
           login_server="$registry_name.azurecr.io"
           image="$login_server/$IMAGE_REPOSITORY:$DEPLOY_SHA"
-          echo "name=$registry_name" >>"$GITHUB_OUTPUT"
           echo "image=$image" >>"$GITHUB_OUTPUT"
           az acr login --name "$registry_name"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Build and push relay image
+      - name: Build and push relay image once
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -72,42 +84,61 @@ jobs:
           provenance: mode=max
           sbom: true
 
-      - name: Deploy immutable image
+  deploy:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.publish.outputs.matrix) }}
+    steps:
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy immutable image to ${{ matrix.slug }}
         shell: bash
         run: |
+          resource_group="$BASE_NAME-${{ matrix.slug }}"
+          app_name="$BASE_NAME-relay-${{ matrix.slug }}"
           az containerapp update \
-            --resource-group "$RESOURCE_GROUP" \
-            --name "$APP_NAME" \
-            --image "${{ steps.registry.outputs.image }}" \
+            --resource-group "$resource_group" \
+            --name "$app_name" \
+            --image "${{ needs.publish.outputs.image }}" \
             --revision-suffix "${DEPLOY_SHA:0:8}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --output none
 
-      - name: Verify active revision
+      - name: Verify active revision in ${{ matrix.slug }}
         shell: bash
         run: |
+          resource_group="$BASE_NAME-${{ matrix.slug }}"
+          app_name="$BASE_NAME-relay-${{ matrix.slug }}"
           revision="$(az containerapp show \
-            --resource-group "$RESOURCE_GROUP" \
-            --name "$APP_NAME" \
+            --resource-group "$resource_group" \
+            --name "$app_name" \
             --query properties.latestRevisionName \
             --output tsv)"
           for attempt in $(seq 1 30); do
             health="$(az containerapp revision show \
-              --resource-group "$RESOURCE_GROUP" \
-              --name "$APP_NAME" \
+              --resource-group "$resource_group" \
+              --name "$app_name" \
               --revision "$revision" \
               --query properties.healthState \
               --output tsv)"
             state="$(az containerapp revision show \
-              --resource-group "$RESOURCE_GROUP" \
-              --name "$APP_NAME" \
+              --resource-group "$resource_group" \
+              --name "$app_name" \
               --revision "$revision" \
               --query properties.runningState \
               --output tsv)"
             if [[ "$health" == "Healthy" \
               && ( "$state" == "Running" || "$state" == "RunningAtMaxScale" ) ]]; then
               az containerapp show \
-                --resource-group "$RESOURCE_GROUP" \
-                --name "$APP_NAME" \
+                --resource-group "$resource_group" \
+                --name "$app_name" \
                 --query "{fqdn:properties.configuration.ingress.fqdn,revision:properties.latestReadyRevisionName}" \
                 --output table
               exit 0

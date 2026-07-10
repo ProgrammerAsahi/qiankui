@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BASE_NAME="qiankui"
-RESOURCE_GROUP="qiankui"
+SHARED_RESOURCE_GROUP=""
 GITHUB_ENVIRONMENT="production"
 GITHUB_REPOSITORY=""
 
@@ -11,7 +11,11 @@ usage() {
     "Usage: deploy/azure/configure-github.sh --github-repository OWNER/REPOSITORY" \
     "" \
     "The script writes only Azure identifiers to GitHub environment secrets." \
-    "No client secret is created; deployments authenticate through OIDC."
+    "No client secret is created; deployments authenticate through OIDC." \
+    "" \
+    "Options:" \
+    "  --shared-resource-group Shared resource group (default: <name>-shared)" \
+    "  --name                  Common project name (default: qiankui)"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -20,8 +24,8 @@ while [[ $# -gt 0 ]]; do
       GITHUB_REPOSITORY="${2:-}"
       shift 2
       ;;
-    --resource-group)
-      RESOURCE_GROUP="${2:-}"
+    --shared-resource-group)
+      SHARED_RESOURCE_GROUP="${2:-}"
       shift 2
       ;;
     --name)
@@ -39,6 +43,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -z "$SHARED_RESOURCE_GROUP" ]]; then
+  SHARED_RESOURCE_GROUP="${BASE_NAME}-shared"
+fi
+
 if [[ ! "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
   printf '%s\n' '--github-repository must use OWNER/REPOSITORY form' >&2
   exit 2
@@ -49,13 +57,13 @@ command -v gh >/dev/null || { printf 'Required command not found: gh\n' >&2; exi
 gh auth status --hostname github.com >/dev/null
 
 GITHUB_CLIENT_ID="$(az deployment group show \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$BASE_NAME-base" \
+  --resource-group "$SHARED_RESOURCE_GROUP" \
+  --name "$BASE_NAME-shared" \
   --query properties.outputs.githubClientId.value \
   --output tsv)"
 AZURE_ACR_NAME="$(az deployment group show \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$BASE_NAME-base" \
+  --resource-group "$SHARED_RESOURCE_GROUP" \
+  --name "$BASE_NAME-shared" \
   --query properties.outputs.registryName.value \
   --output tsv)"
 AZURE_TENANT_ID="$(az account show --query tenantId --output tsv)"
@@ -88,6 +96,10 @@ gh variable set AZURE_ACR_NAME \
   --repo "$GITHUB_REPOSITORY" \
   --env "$GITHUB_ENVIRONMENT" \
   --body "$AZURE_ACR_NAME"
+gh variable set AZURE_BASE_NAME \
+  --repo "$GITHUB_REPOSITORY" \
+  --env "$GITHUB_ENVIRONMENT" \
+  --body "$BASE_NAME"
 
 printf 'GitHub %s 环境已接 Azure OIDC，且惟 main 可用；未造客户端密码。\n' "$GITHUB_ENVIRONMENT"
 gh secret list --repo "$GITHUB_REPOSITORY" --env "$GITHUB_ENVIRONMENT"

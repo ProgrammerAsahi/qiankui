@@ -3,12 +3,17 @@ set -euo pipefail
 umask 077
 
 BASE_NAME="qiankui"
-RESOURCE_GROUP="qiankui"
+SHARED_RESOURCE_GROUP=""
+REGION="japaneast"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --resource-group)
-      RESOURCE_GROUP="${2:-}"
+    --shared-resource-group)
+      SHARED_RESOURCE_GROUP="${2:-}"
+      shift 2
+      ;;
+    --region)
+      REGION="${2:-}"
       shift 2
       ;;
     --name)
@@ -16,7 +21,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help)
-      printf 'Usage: deploy/azure/configure-client.sh [--resource-group NAME] [--name NAME]\n'
+      printf 'Usage: deploy/azure/configure-client.sh [--region SLUG] [--shared-resource-group NAME] [--name NAME]\n'
       exit 0
       ;;
     *)
@@ -25,6 +30,17 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -z "$SHARED_RESOURCE_GROUP" ]]; then
+  SHARED_RESOURCE_GROUP="${BASE_NAME}-shared"
+fi
+if [[ ! "$REGION" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+  printf '%s\n' '--region must be a lowercase region slug' >&2
+  exit 2
+fi
+
+REGIONAL_RESOURCE_GROUP="${BASE_NAME}-${REGION}"
+APP_NAME="${BASE_NAME}-relay-${REGION}"
 
 for command in az cargo git; do
   command -v "$command" >/dev/null || {
@@ -35,13 +51,13 @@ done
 
 ROOT="$(git rev-parse --show-toplevel)"
 KEY_VAULT_NAME="$(az deployment group show \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$BASE_NAME-base" \
+  --resource-group "$SHARED_RESOURCE_GROUP" \
+  --name "$BASE_NAME-shared" \
   --query properties.outputs.keyVaultName.value \
   --output tsv)"
 RELAY_FQDN="$(az containerapp show \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$BASE_NAME" \
+  --resource-group "$REGIONAL_RESOURCE_GROUP" \
+  --name "$APP_NAME" \
   --query properties.configuration.ingress.fqdn \
   --output tsv)"
 
@@ -79,4 +95,4 @@ printf '%s' "$TOKEN" \
       --force
 unset TOKEN
 
-printf '\n近端已备。运行 `qiankui`，本机应用取 SOCKS5 127.0.0.1:1080。\n'
+printf '\n近端已备，所择区域为 %s。运行 `qiankui`，本机应用取 SOCKS5 127.0.0.1:1080。\n' "$REGION"

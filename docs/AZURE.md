@@ -1,30 +1,74 @@
 # Azure 置邮之法
 
-此章在 Azure 日本东部（`japaneast`）建立潜逵置邮。运行面为 Azure Container Apps Consumption，入口为原始 TCP `8443`；镜像藏于 ACR，符节与 TLS 信证藏于 Key Vault。GitHub Actions 借 OIDC 短期登录，不设客户端密码。
+此章以 Azure Container Apps 布潜逵置邮。其制分三层：共用之物归 `shared`，随地而异者归区域资源组，平台自理之负载均衡器与公网地址归该区域独有的 `infra` 资源组。镜像只构建一次，而后发往诸区域。
 
-## 资源
+运行面为 Container Apps Consumption，公网入口为原始 TCP `8443`。镜像藏于 ACR，符节与 TLS 信证藏于 Key Vault；GitHub Actions 借 OIDC 短期登录，不设客户端密码。
 
-| 资源 | 名称 | 用途 |
+## 名制
+
+以日本东部 `japaneast` 为例：
+
+| 层次 | 资源 | 名称 |
 |---|---|---|
-| Resource Group | `qiankui` | 总辖诸资源 |
-| Virtual Network / Subnet | `qiankui` | Container Apps 外部 TCP 所需 |
-| Container Apps Environment | `qiankui` | 日本东部 Consumption 环境 |
-| Container App | `qiankui` | 单副本 relay |
-| Managed Identity | `qiankui` | 运行时读取三个 Key Vault secret、拉取镜像 |
-| Managed Identity | `qiankui-github` | GitHub OIDC 部署身份 |
-| ACR | `qiankui<订阅散列>` | 全局唯一的 relay 镜像仓库 |
-| Key Vault | `qiankui-<订阅散列>` | 全局唯一的运行秘密仓库 |
+| 共用 | Resource Group | `qiankui-shared` |
+| 共用 | ACR | `qiankui<订阅散列>` |
+| 共用 | Key Vault | `qiankui-<订阅散列>` |
+| 共用 | 运行身份 | `qiankui-runtime` |
+| 共用 | GitHub OIDC 身份 | `qiankui-github` |
+| 区域 | Resource Group | `qiankui-japaneast` |
+| 区域 | Virtual Network | `qiankui-vnet-japaneast` |
+| 区域 | Infrastructure Subnet | `qiankui-snet-aca-japaneast` |
+| 区域 | Container Apps Environment | `qiankui-japaneast` |
+| 区域 | Container App | `qiankui-relay-japaneast` |
+| 平台 | Managed Resource Group | `qiankui-infra-japaneast` |
+| 平台 | Load Balancer / Public IP | Azure 所造之 `capp-svc-lb*` |
 
-ACR 与 Key Vault 名称须在全 Azure 唯一，故附只由订阅 ID 推得的稳定后缀；源码不保存订阅、租户或账户信息。
+资源组不作嵌套。`qiankui-infra-<region>` 由对应的 Container Apps Environment 独占，勿手改其内资源。`NetworkWatcherRG` 为订阅级网络诊断资源，不属潜逵命名体系，亦不纳入本项目 IaC。
 
-## 边界
+ACR、Key Vault 与两个用户分配身份只建一次。每一区域必须另有 VNet、子网、Environment、Container App、负载均衡器与公网 IP；区域资源不得跨地复用。
 
-- Container App 托管身份可拉取 ACR 镜像。
-- 该身份仅能读取 `relay-token`、`tls-cert`、`tls-key` 三个具体 secret。
-- CA 私钥虽存 Key Vault，Container App 无权读取。
-- GitHub 部署身份仅有 Container Apps Contributor 与 ACR Push；不能管理 Key Vault、VNet 或托管身份，也没有 Key Vault 数据面权限。
-- GitHub `production` 环境保存 `AZURE_CLIENT_ID`、`AZURE_TENANT_ID`、`AZURE_SUBSCRIPTION_ID` 三个标识型 secret，以及非敏感变量 `AZURE_ACR_NAME`；没有客户端密码。
-- `production` 环境的部署分支策略只允许 `main`，与 OIDC 的 environment subject 合为两重边界。
+## 区域簿
+
+诸区域尽录于 [`deploy/azure/regions.json`](../deploy/azure/regions.json)。日本东部初值如下：
+
+```json
+{
+  "sharedLocation": "japaneast",
+  "regions": [
+    {
+      "slug": "japaneast",
+      "location": "japaneast",
+      "networkAddressPrefix": "10.42.0.0/24",
+      "infrastructureSubnetAddressPrefix": "10.42.0.0/27"
+    }
+  ]
+}
+```
+
+`sharedLocation` 一经初立即应保持不变；它决定 ACR、Key Vault 与两个共享身份的所在地。新增区域只追加 `regions` 项，不改变共享层位置。
+
+欲添美国东部，可续录一项，并分配不重叠网段：
+
+```json
+{
+  "slug": "eastus",
+  "location": "eastus",
+  "networkAddressPrefix": "10.43.0.0/24",
+  "infrastructureSubnetAddressPrefix": "10.43.0.0/27"
+}
+```
+
+欧洲可依次用 `10.44.0.0/24`。网段虽未必立即互联，仍须全局不重叠，以免日后 VNet peering 或内网控制面受阻。
+
+## 权界
+
+- `qiankui-runtime` 可拉取共享 ACR 镜像。
+- 运行身份只能读取 `relay-token` 与各区域的 `tls-cert-<region>`、`tls-key-<region>`。
+- `tls-ca-cert`、`tls-ca-key` 共用；CA 私钥不授予 Container App。
+- 每个区域使用按该区域 Azure FQDN 签发的服务端证书，不能跨区域复用。
+- `qiankui-github` 对 ACR 只有 Push 权，对各区域资源组只有 Container Apps Contributor。
+- GitHub 身份不能管理 Key Vault、VNet、Managed Environment 或托管身份，也没有 Key Vault 数据面权限。
+- GitHub `production` 环境保存三个 Azure 标识型 secret；没有客户端密码。
 - 本地符节只写入权限为 `0600` 的简牍，不入 Git。
 
 ## 初立
@@ -43,13 +87,22 @@ deploy/azure/bootstrap.sh \
   --github-repository OWNER/REPOSITORY
 ```
 
-此令依次：
+此令依次建立共享层，构建一次 relay 镜像，再遍历区域簿：
 
-1. 建日本东部资源组、VNet、Container Apps 环境、ACR、Key Vault 与托管身份。
-2. 由 ACR 云端构建 relay 镜像，本机不必有 Docker。
-3. 生成随机 256 位符节及专用 CA、服务端证书，写入 Key Vault。
-4. 以逐 secret RBAC 授权运行身份。
-5. 建立外部 TCP `8443` 的 Container App，并维持一个最小副本。
+1. 建 `qiankui-shared`、ACR、Key Vault 与两个身份。
+2. 生成或复用随机 256 位符节与专用 CA。
+3. 为每一区域建立区域 RG、VNet、子网及 Container Apps Environment。
+4. 明定平台资源组为 `qiankui-infra-<region>`。
+5. 为各区域 FQDN 签发独立服务端证书。
+6. 建外部 TCP `8443` 的 Container App，并维持一个最小副本。
+
+只建立新添的一个区域：
+
+```sh
+deploy/azure/bootstrap.sh \
+  --github-repository OWNER/REPOSITORY \
+  --region eastus
+```
 
 再将 OIDC 标识写入 GitHub `production` 环境：
 
@@ -58,13 +111,15 @@ deploy/azure/configure-github.sh \
   --github-repository OWNER/REPOSITORY
 ```
 
-最后装近端命令，并从 Key Vault 安全取得公证与符节：
+## 近端
+
+安装近端命令并选择区域：
 
 ```sh
-deploy/azure/configure-client.sh
+deploy/azure/configure-client.sh --region japaneast
 ```
 
-此令把 `qiankui` 装入 `~/.cargo/bin`，写好 `~/.config/qiankui/config.toml` 与 `azure-ca.pem`。随后只需：
+此令把 `qiankui` 装入 `~/.cargo/bin`，从共享 Key Vault 取得 CA 与符节，再把所选区域的 relay 写入 `~/.config/qiankui/config.toml`。随后只需：
 
 ```sh
 qiankui
@@ -75,37 +130,46 @@ curl --proxy socks5h://127.0.0.1:1080 https://example.com
 
 每次推送 `main` 后：
 
-1. `.github/workflows/ci.yml` 运行格式、Clippy、测试、release 构建、shell 语法与 Bicep 编译。
-2. CI 成功方触发 `.github/workflows/deploy-azure.yml`。
+1. CI 运行格式、Clippy、测试、release 构建、shell 语法、区域簿校验及 Bicep 编译。
+2. CI 成功方触发 Azure 部署。
 3. GitHub 以 OIDC 换取短期 Azure 令牌。
-4. BuildKit 构建镜像，以完整 Git SHA 为标签推入 ACR。
-5. Container Apps API 只更新不可变镜像并发布新 revision，再等候其 `Healthy`、`Running`。
+4. BuildKit 以完整 Git SHA 为标签构建一次镜像并推入共享 ACR。
+5. 流水线从区域簿生成矩阵，并行更新各区域 Container App。
+6. 每一区域皆须达到 `Healthy`、`Running`，流水线方为成功。
 
 流水线不使用 `latest` 标签，亦不读取 relay 符节或 TLS 私钥。
 
-## TLS
+## TLS 与符节
 
 Container Apps 的 TCP ingress 原样转发字节，由 `qiankui-relay` 自行终止 TLS。Azure 不准外部 TCP ingress 使用 `80` 或 `443`，故公网端口固定为 `8443`。
 
-初版使用专用 CA 为 Container App 的 Azure FQDN 签证；公证下发本机，私钥仅在 Key Vault。日后绑定自有域名时，可改接 ACME 自动续期，而无需改变 relay 协议。
+初版使用一枚共享专用 CA，为各区域 Container App 的 Azure FQDN 分别签证。轮换全网符节：
+
+```sh
+deploy/azure/rotate-token.sh
+deploy/azure/configure-client.sh --region japaneast
+```
+
+仅重启一区：
+
+```sh
+deploy/azure/rotate-token.sh --region japaneast
+```
 
 ## 察看
 
 ```sh
-az containerapp show --resource-group qiankui --name qiankui --output table
-az containerapp revision list --resource-group qiankui --name qiankui --output table
-az containerapp logs show --resource-group qiankui --name qiankui --type system --follow
+az containerapp show \
+  --resource-group qiankui-japaneast \
+  --name qiankui-relay-japaneast \
+  --output table
+
+az containerapp revision list \
+  --resource-group qiankui-japaneast \
+  --name qiankui-relay-japaneast \
+  --output table
 ```
-
-轮换符节后应立即重配近端：
-
-```sh
-deploy/azure/rotate-token.sh
-deploy/azure/configure-client.sh
-```
-
-查看 Key Vault secret 时勿用 `--query value`，除非确需在受控本机重配客户端。Bicep 初立时采用无版本 Key Vault URI；`rotate-token.sh` 则显式绑定新版本并等待 revision 健康重启，以免受后台同步时延所累。
 
 ## 费用
 
-此部署会产生 Azure 费用，主要来自 ACR Basic、Container Apps 常驻最小副本、网络出口及少量 Key Vault 操作。VNet 本身通常不单独计费。请在 Azure Cost Management 设预算与告警。
+共享层主要产生 ACR Basic 与少量 Key Vault 操作费用；每增一区域，主要增加 Container Apps 常驻最小副本、区域公网 IP、负载均衡与网络出口费用。资源组本身不收费。宜在 Azure Cost Management 设预算与告警。

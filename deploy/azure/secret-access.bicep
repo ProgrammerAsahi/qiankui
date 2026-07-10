@@ -4,16 +4,23 @@ targetScope = 'resourceGroup'
 @maxLength(12)
 param baseName string = 'qiankui'
 
-var suffix = take(uniqueString(subscription().subscriptionId), 8)
-var vaultName = '${baseName}-${suffix}'
+@description('Stable lowercase region identifier used in regional secret names.')
+param regionSlug string
+
+param keyVaultName string
+
+param runtimeIdentityName string = '${baseName}-runtime'
+
+var tlsCertificateSecretName = 'tls-cert-${regionSlug}'
+var tlsPrivateKeySecretName = 'tls-key-${regionSlug}'
 var keyVaultSecretsUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 
 resource vault 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
-  name: vaultName
+  name: keyVaultName
 }
 
 resource runtimeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
-  name: baseName
+  name: runtimeIdentityName
 }
 
 resource relayToken 'Microsoft.KeyVault/vaults/secrets@2024-11-01' existing = {
@@ -23,12 +30,12 @@ resource relayToken 'Microsoft.KeyVault/vaults/secrets@2024-11-01' existing = {
 
 resource tlsCertificate 'Microsoft.KeyVault/vaults/secrets@2024-11-01' existing = {
   parent: vault
-  name: 'tls-cert'
+  name: tlsCertificateSecretName
 }
 
 resource tlsPrivateKey 'Microsoft.KeyVault/vaults/secrets@2024-11-01' existing = {
   parent: vault
-  name: 'tls-key'
+  name: tlsPrivateKeySecretName
 }
 
 resource relayTokenReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
